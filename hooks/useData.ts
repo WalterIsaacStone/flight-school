@@ -6,6 +6,7 @@ import type {
   Booking,
   Student,
   Line,
+  LineTag,
   ActionItem,
   CourseType,
   BillingTag,
@@ -19,6 +20,11 @@ type BookingWithStudent = Booking & {
   updated_at?: string;
 };
 
+// Extended type for lines with tag info
+type LineWithTag = Line & {
+  line_tags?: LineTag | null;
+};
+
 // =============================================================================
 // Query Keys
 // =============================================================================
@@ -27,6 +33,7 @@ export const queryKeys = {
   bookings: ["bookings"] as const,
   students: ["students"] as const,
   lines: ["lines"] as const,
+  lineTags: ["lineTags"] as const,
   actions: ["actions"] as const,
   actionsForBooking: (bookingId: string) => ["actions", bookingId] as const,
   courseTypes: ["courseTypes"] as const,
@@ -188,6 +195,95 @@ export function useDeleteLine() {
       queryClient.invalidateQueries({ queryKey: queryKeys.lines });
       queryClient.invalidateQueries({ queryKey: queryKeys.bookings });
       queryClient.invalidateQueries({ queryKey: queryKeys.actions });
+    },
+  });
+}
+
+// =============================================================================
+// Line Tags Hooks
+// =============================================================================
+
+export function useLineTags() {
+  return useQuery({
+    queryKey: queryKeys.lineTags,
+    queryFn: async () => {
+      return services.fetchLineTags();
+    },
+  });
+}
+
+export function useCreateLineTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: { name: string; color?: string; description?: string }) => {
+      return services.createLineTag({
+        name: input.name,
+        color: input.color || null,
+        description: input.description || null,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lineTags });
+    },
+  });
+}
+
+export function useUpdateLineTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      id,
+      updates,
+    }: {
+      id: string;
+      updates: { name?: string; color?: string; description?: string };
+    }) => {
+      return services.updateLineTag(id, updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lineTags });
+    },
+  });
+}
+
+export function useDeleteLineTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      return services.deleteLineTag(id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lineTags });
+      queryClient.invalidateQueries({ queryKey: queryKeys.lines });
+    },
+  });
+}
+
+export function useUpdateLineTagAssignment() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ lineId, lineTagId }: { lineId: string; lineTagId: string | null }) => {
+      return services.updateLineTag_assignment(lineId, lineTagId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lines });
+    },
+  });
+}
+
+export function useUpdateLineSortOrders() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (updates: { id: string; sort_order: number }[]) => {
+      return services.updateLineSortOrders(updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.lines });
     },
   });
 }

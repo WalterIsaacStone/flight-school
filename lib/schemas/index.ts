@@ -10,16 +10,46 @@ import { z } from "zod";
 const uuidSchema = z.string().uuid();
 
 // -----------------------------------------------------------------------------
+// Line Tag Schemas (for categorizing lines)
+// -----------------------------------------------------------------------------
+export const LineTagSchema = z.object({
+  id: uuidSchema,
+  name: z.string().min(1).max(100),
+  color: z.string().max(50).nullable(),
+  description: z.string().max(500).nullable(),
+  sort_order: z.number().int().default(0),
+});
+
+export const LineTagArraySchema = z.array(LineTagSchema);
+
+export const CreateLineTagSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100),
+  color: z.string().max(50).nullable().or(z.literal("")),
+  description: z.string().max(500).nullable().or(z.literal("")),
+});
+
+export type LineTag = z.infer<typeof LineTagSchema>;
+export type CreateLineTagInput = z.infer<typeof CreateLineTagSchema>;
+
+// -----------------------------------------------------------------------------
 // Line Schemas
 // -----------------------------------------------------------------------------
 export const LineSchema = z.object({
   id: uuidSchema,
   name: z.string().min(1).max(255),
+  sort_order: z.number().int().default(0),
+  line_tag_id: uuidSchema.nullable().optional(),
+});
+
+export const LineWithTagSchema = LineSchema.extend({
+  line_tags: LineTagSchema.nullable().optional(),
 });
 
 export const LineArraySchema = z.array(LineSchema);
+export const LineWithTagArraySchema = z.array(LineWithTagSchema);
 
 export type Line = z.infer<typeof LineSchema>;
+export type LineWithTag = z.infer<typeof LineWithTagSchema>;
 
 // -----------------------------------------------------------------------------
 // Student Schemas

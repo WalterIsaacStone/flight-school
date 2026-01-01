@@ -7,6 +7,9 @@
 // Domain types (validated by Zod)
 export type {
   Line,
+  LineWithTag,
+  LineTag,
+  CreateLineTagInput,
   Student,
   CreateStudentInput,
   CourseType,
@@ -27,6 +30,11 @@ export type {
 export {
   LineSchema,
   LineArraySchema,
+  LineWithTagSchema,
+  LineWithTagArraySchema,
+  LineTagSchema,
+  LineTagArraySchema,
+  CreateLineTagSchema,
   StudentSchema,
   StudentArraySchema,
   CreateStudentSchema,

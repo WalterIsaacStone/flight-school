@@ -8,7 +8,8 @@ import type { Line, ServiceResult } from "@/types";
 export async function fetchLines(): Promise<ServiceResult<Line[]>> {
   const { data, error } = await supabase
     .from("lines")
-    .select("id, name")
+    .select("id, name, sort_order, line_tag_id")
+    .order("sort_order", { ascending: true })
     .order("name");
 
   if (error) {
@@ -20,10 +21,19 @@ export async function fetchLines(): Promise<ServiceResult<Line[]>> {
 }
 
 export async function createLine(name: string): Promise<ServiceResult<Line>> {
+  // Get max sort_order to add at end
+  const { data: existing } = await supabase
+    .from("lines")
+    .select("sort_order")
+    .order("sort_order", { ascending: false })
+    .limit(1);
+
+  const nextOrder = existing && existing.length > 0 ? (existing[0].sort_order || 0) + 1 : 1;
+
   const { data, error } = await supabase
     .from("lines")
-    .insert({ name })
-    .select("id, name")
+    .insert({ name, sort_order: nextOrder })
+    .select("id, name, sort_order, line_tag_id")
     .single();
 
   if (error) {
@@ -42,7 +52,7 @@ export async function updateLine(
     .from("lines")
     .update({ name })
     .eq("id", id)
-    .select("id, name")
+    .select("id, name, sort_order, line_tag_id")
     .single();
 
   if (error) {

@@ -7,6 +7,7 @@ import {
   useBillingTags,
   useStudents,
   useStudentTags,
+  useLineTags,
   useCreateCourseType,
   useUpdateCourseType,
   useDeleteCourseType,
@@ -15,6 +16,8 @@ import {
   useDeleteBillingTag,
   useCreateStudentTag,
   useDeleteStudentTag,
+  useCreateLineTag,
+  useDeleteLineTag,
 } from "@/hooks/useData";
 import { useToast } from "@/components/ui/Toast";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -30,6 +33,7 @@ export default function SettingsPage() {
   const { data: billingTags = [], isLoading: billingTagsLoading } = useBillingTags();
   const { data: students = [], isLoading: studentsLoading } = useStudents();
   const { data: studentTags = [], isLoading: studentTagsLoading } = useStudentTags();
+  const { data: lineTags = [], isLoading: lineTagsLoading } = useLineTags();
 
   // Mutations
   const createCourseTypeMutation = useCreateCourseType();
@@ -40,6 +44,8 @@ export default function SettingsPage() {
   const deleteBillingTagMutation = useDeleteBillingTag();
   const createStudentTagMutation = useCreateStudentTag();
   const deleteStudentTagMutation = useDeleteStudentTag();
+  const createLineTagMutation = useCreateLineTag();
+  const deleteLineTagMutation = useDeleteLineTag();
 
   // UI helpers
   const { showToast } = useToast();
@@ -79,6 +85,52 @@ export default function SettingsPage() {
       return acc;
     }, {});
   }, [studentTags]);
+
+  // ---------------------------------------------------------------------------
+  // Line Tag State
+  // ---------------------------------------------------------------------------
+  const [newLineTagName, setNewLineTagName] = useState("");
+  const [newLineTagColor, setNewLineTagColor] = useState("#10b981");
+  const [newLineTagDesc, setNewLineTagDesc] = useState("");
+
+  // ---------------------------------------------------------------------------
+  // Line Tag Handlers
+  // ---------------------------------------------------------------------------
+  async function addLineTag() {
+    if (!newLineTagName.trim()) return;
+
+    try {
+      await createLineTagMutation.mutateAsync({
+        name: newLineTagName.trim(),
+        color: newLineTagColor,
+        description: newLineTagDesc || undefined,
+      });
+      setNewLineTagName("");
+      setNewLineTagColor("#10b981");
+      setNewLineTagDesc("");
+      showToast("Row type added", "success");
+    } catch (err) {
+      showToast("Could not add row type", "error");
+    }
+  }
+
+  async function deleteLineTag(id: string) {
+    const confirmed = await confirm({
+      title: "Delete Row Type",
+      message: "Are you sure? Lines using this type will become untagged.",
+      confirmLabel: "Delete",
+      variant: "danger",
+    });
+
+    if (!confirmed) return;
+
+    try {
+      await deleteLineTagMutation.mutateAsync(id);
+      showToast("Row type deleted", "success");
+    } catch (err) {
+      showToast("Could not delete row type", "error");
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Course Type Handlers
@@ -290,7 +342,7 @@ export default function SettingsPage() {
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
-  const loading = courseTypesLoading || billingTagsLoading || studentsLoading || studentTagsLoading;
+  const loading = courseTypesLoading || billingTagsLoading || studentsLoading || studentTagsLoading || lineTagsLoading;
 
   return (
     <main className="min-h-screen bg-slate-900 text-slate-50">
@@ -311,6 +363,86 @@ export default function SettingsPage() {
             </Link>
           </div>
         </header>
+
+        {/* Line Tags (Row Types) */}
+        <section className="bg-slate-800/70 border border-slate-700 rounded-xl p-4 space-y-3 text-sm">
+          <h2 className="font-semibold text-base">Row types</h2>
+          <p className="text-xs text-slate-300">
+            Organize your calendar rows into categories (e.g., Rental Car, Checkride Schedule, Airbnb).
+          </p>
+
+          {lineTagsLoading ? (
+            <SettingsListSkeleton />
+          ) : (
+            <div className="space-y-2">
+              {lineTags.length === 0 ? (
+                <p className="text-xs text-slate-400">No row types yet. Add some below.</p>
+              ) : (
+                <ul className="space-y-1">
+                  {lineTags.map((tag) => (
+                    <li
+                      key={tag.id}
+                      className="flex items-center justify-between gap-2 bg-slate-900/60 border border-slate-700 rounded-md px-2 py-1"
+                    >
+                      <div className="flex items-center gap-2 flex-1">
+                        <span
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: tag.color || "#10b981" }}
+                        />
+                        <div className="flex-1">
+                          <div className="font-medium text-xs">{tag.name}</div>
+                          {tag.description && (
+                            <div className="text-[11px] text-slate-400">{tag.description}</div>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => deleteLineTag(tag.id)}
+                        disabled={deleteLineTagMutation.isPending}
+                        className="text-[11px] text-red-400 hover:text-red-300 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* Add new line tag */}
+              <div className="pt-2 border-t border-slate-700 space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    className="flex-1 bg-slate-900 border border-slate-600 rounded-md px-2 py-1 text-xs"
+                    placeholder="Row type name (e.g., Rental Car)"
+                    value={newLineTagName}
+                    onChange={(e) => setNewLineTagName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && addLineTag()}
+                  />
+                  <input
+                    type="color"
+                    className="w-10 h-8 bg-slate-900 border border-slate-600 rounded-md cursor-pointer"
+                    value={newLineTagColor}
+                    onChange={(e) => setNewLineTagColor(e.target.value)}
+                    title="Pick a color"
+                  />
+                </div>
+                <textarea
+                  className="w-full bg-slate-900 border border-slate-600 rounded-md px-2 py-1 text-[11px] min-h-[40px]"
+                  placeholder="Description (optional)"
+                  value={newLineTagDesc}
+                  onChange={(e) => setNewLineTagDesc(e.target.value)}
+                />
+                <button
+                  onClick={addLineTag}
+                  disabled={createLineTagMutation.isPending || !newLineTagName.trim()}
+                  className="text-xs px-3 py-1 rounded-md bg-emerald-500 text-slate-900 font-semibold hover:bg-emerald-400 disabled:opacity-50"
+                >
+                  {createLineTagMutation.isPending ? "Adding…" : "Add row type"}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         {/* Course Types */}
         <section className="bg-slate-800/70 border border-slate-700 rounded-xl p-4 space-y-3 text-sm">

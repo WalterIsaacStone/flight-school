@@ -13,9 +13,19 @@ type CourseType = {
   weekly_capacity: number | null;
 };
 
+type LineTag = {
+  id: string;
+  name: string;
+  color: string | null;
+  description: string | null;
+  sort_order: number;
+};
+
 type Line = {
   id: string;
   name: string;
+  sort_order: number;
+  line_tag_id: string | null;
 };
 
 type Student = {
@@ -136,6 +146,7 @@ function normalizeDateString(value: string | null): string | null {
 
 export default function CalendarPage() {
   const [lines, setLines] = useState<Line[]>([]);
+  const [lineTags, setLineTags] = useState<LineTag[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,8 +165,12 @@ export default function CalendarPage() {
 
   // Filters
   const [filterLineId, setFilterLineId] = useState<"all" | string>("all");
+  const [filterLineTagId, setFilterLineTagId] = useState<"all" | string>("all");
   const [filterCourseType, setFilterCourseType] = useState<string>("");
   const [filterBillingTag, setFilterBillingTag] = useState<string>("");
+
+  // Drag and drop
+  const [draggedLineId, setDraggedLineId] = useState<string | null>(null);
 
   // Detail / Edit drawer
   const [panelOpen, setPanelOpen] = useState(false);
@@ -174,6 +189,9 @@ export default function CalendarPage() {
   const [newStudentEmail, setNewStudentEmail] = useState("");
   const [newStudentPhone, setNewStudentPhone] = useState("");
   const [newStudentNotes, setNewStudentNotes] = useState("");
+
+  // Student search
+  const [studentSearch, setStudentSearch] = useState("");
 
   // Line editing
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -242,12 +260,14 @@ export default function CalendarPage() {
 
     const [
       { data: linesData, error: linesError },
+      { data: lineTagsData, error: lineTagsError },
       { data: studentsData, error: studentsError },
       { data: bookingsData, error: bookingsError },
       { data: billingTagData, error: billingTagError },
       { data: courseTypeData, error: courseTypeError },
     ] = await Promise.all([
-      supabase.from("lines").select("id, name").order("name"),
+      supabase.from("lines").select("id, name, sort_order, line_tag_id").order("sort_order").order("name"),
+      supabase.from("line_tags").select("id, name, color, description, sort_order").order("sort_order"),
       supabase
         .from("students")
         .select("id, full_name, email, phone, notes")
@@ -269,6 +289,7 @@ export default function CalendarPage() {
     ]);
 
     if (linesError) console.error("Error loading lines:", linesError.message);
+    if (lineTagsError) console.error("Error loading line tags:", lineTagsError.message);
     if (studentsError)
       console.error("Error loading students:", studentsError.message);
     if (bookingsError)
@@ -279,6 +300,7 @@ export default function CalendarPage() {
       console.error("Error loading course types:", courseTypeError.message);
 
     if (linesData) setLines(linesData as Line[]);
+    if (lineTagsData) setLineTags(lineTagsData as LineTag[]);
     if (studentsData) setStudents(studentsData as Student[]);
     if (billingTagData) setBillingTags(billingTagData as BillingTag[]);
     if (courseTypeData) setCourseTypes(courseTypeData as CourseType[]);
@@ -369,10 +391,12 @@ export default function CalendarPage() {
 
   const visibleLines = useMemo(
     () =>
-      lines.filter(
-        (line) => filterLineId === "all" || line.id === filterLineId
-      ),
-    [lines, filterLineId]
+      lines.filter((line) => {
+        if (filterLineId !== "all" && line.id !== filterLineId) return false;
+        if (filterLineTagId !== "all" && line.line_tag_id !== filterLineTagId) return false;
+        return true;
+      }),
+    [lines, filterLineId, filterLineTagId]
   );
 
   const filteredBookings = useMemo(
@@ -387,6 +411,39 @@ export default function CalendarPage() {
       }),
     [bookings, filterLineId, filterCourseType, filterBillingTag]
   );
+
+  // Students sorted by most recent booking, then filtered by search
+  const sortedStudents = useMemo(() => {
+    // Get most recent booking date for each student
+    const lastBookingDate: Record<string, string> = {};
+    bookings.forEach((b) => {
+      const current = lastBookingDate[b.student_id];
+      if (!current || b.start_date > current) {
+        lastBookingDate[b.student_id] = b.start_date;
+      }
+    });
+
+    // Sort students: those with bookings first (by most recent), then alphabetical
+    return [...students].sort((a, b) => {
+      const aDate = lastBookingDate[a.id];
+      const bDate = lastBookingDate[b.id];
+      if (aDate && !bDate) return -1;
+      if (!aDate && bDate) return 1;
+      if (aDate && bDate) return bDate.localeCompare(aDate); // Most recent first
+      return (a.full_name || "").localeCompare(b.full_name || "");
+    });
+  }, [students, bookings]);
+
+  const filteredStudents = useMemo(() => {
+    if (!studentSearch.trim()) return sortedStudents;
+    const search = studentSearch.toLowerCase();
+    return sortedStudents.filter(
+      (s) =>
+        s.full_name?.toLowerCase().includes(search) ||
+        s.email?.toLowerCase().includes(search) ||
+        s.phone?.toLowerCase().includes(search)
+    );
+  }, [sortedStudents, studentSearch]);
 
   const courseTypeChipLabels = useMemo(() => {
     const fromDb = courseTypes.map((ct) => ct.name);
@@ -416,6 +473,7 @@ export default function CalendarPage() {
     setNewStudentEmail("");
     setNewStudentPhone("");
     setNewStudentNotes("");
+    setStudentSearch("");
   }
 
   function openCreatePanel(lineId: string, date: Date) {
@@ -855,6 +913,45 @@ export default function CalendarPage() {
     await fetchData();
   }
 
+  async function handleDropLine(targetLineId: string) {
+    if (!draggedLineId || draggedLineId === targetLineId) return;
+
+    // Find the indices
+    const draggedIndex = lines.findIndex((l) => l.id === draggedLineId);
+    const targetIndex = lines.findIndex((l) => l.id === targetLineId);
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    // Reorder locally first for instant feedback
+    const newLines = [...lines];
+    const [removed] = newLines.splice(draggedIndex, 1);
+    newLines.splice(targetIndex, 0, removed);
+
+    // Update sort_order for all affected lines
+    const updates = newLines.map((line, idx) => ({
+      id: line.id,
+      sort_order: idx,
+    }));
+
+    // Update state immediately for responsiveness
+    setLines(newLines.map((l, idx) => ({ ...l, sort_order: idx })));
+    setDraggedLineId(null);
+
+    // Persist to database
+    for (const update of updates) {
+      const { error } = await supabase
+        .from("lines")
+        .update({ sort_order: update.sort_order })
+        .eq("id", update.id);
+
+      if (error) {
+        console.error("Error updating line order:", error.message);
+        // Refresh to get correct order from DB
+        await fetchData();
+        return;
+      }
+    }
+  }
+
   /* ---------- Render ---------- */
 
   const selectedStudent =
@@ -966,26 +1063,28 @@ export default function CalendarPage() {
               </div>
             )}
             {viewMode === "week" && weeklyCapacitySummary.length > 0 && (
-              <div className="flex flex-wrap justify-end gap-1 text-[11px]">
-                {weeklyCapacitySummary.map((item) => {
-                  const over = item.booked > item.capacity;
-                  const full = item.booked === item.capacity;
+              <div className="max-w-md max-h-24 overflow-y-auto overflow-x-hidden border border-slate-700 rounded-lg p-2 bg-slate-800/50">
+                <div className="flex flex-wrap gap-1 text-[11px]">
+                  {weeklyCapacitySummary.map((item) => {
+                    const over = item.booked > item.capacity;
+                    const full = item.booked === item.capacity;
 
-                  const classes = over
-                    ? "bg-red-500/20 border-red-400 text-red-200"
-                    : full
-                    ? "bg-amber-500/20 border-amber-400 text-amber-200"
-                    : "bg-emerald-500/15 border-emerald-500/70 text-emerald-200";
+                    const classes = over
+                      ? "bg-red-500/20 border-red-400 text-red-200"
+                      : full
+                      ? "bg-amber-500/20 border-amber-400 text-amber-200"
+                      : "bg-emerald-500/15 border-emerald-500/70 text-emerald-200";
 
-                  return (
-                    <span
-                      key={item.name}
-                      className={`px-2 py-1 rounded-full border ${classes}`}
-                    >
-                      {item.name}: {item.booked} / {item.capacity}
-                    </span>
-                  );
-                })}
+                    return (
+                      <span
+                        key={item.name}
+                        className={`px-2 py-0.5 rounded-full border ${classes}`}
+                      >
+                        {item.name}: {item.booked} / {item.capacity}
+                      </span>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -1029,6 +1128,26 @@ export default function CalendarPage() {
               {lines.map((line) => (
                 <option key={line.id} value={line.id}>
                   {line.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-slate-300">Row type</span>
+            <select
+              className="bg-slate-900 border border-slate-600 rounded-md px-2 py-1"
+              value={filterLineTagId}
+              onChange={(e) =>
+                setFilterLineTagId(
+                  e.target.value === "all" ? "all" : e.target.value
+                )
+              }
+            >
+              <option value="all">All types</option>
+              {lineTags.map((tag) => (
+                <option key={tag.id} value={tag.id}>
+                  {tag.name}
                 </option>
               ))}
             </select>
@@ -1102,13 +1221,71 @@ export default function CalendarPage() {
                   <code>lines</code> table.
                 </div>
               ) : (
-                visibleLines.map((line) => (
+                visibleLines.map((line, lineIndex) => (
                   <div
                     key={line.id}
-                    className="grid grid-cols-[260px_repeat(7,minmax(0,1fr))] text-xs border-b border-slate-800"
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedLineId(line.id);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragEnd={() => setDraggedLineId(null)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                    }}
+                    onDrop={async (e) => {
+                      e.preventDefault();
+                      if (!draggedLineId || draggedLineId === line.id) return;
+                      
+                      // Find indices
+                      const draggedIndex = visibleLines.findIndex(l => l.id === draggedLineId);
+                      const targetIndex = lineIndex;
+                      if (draggedIndex === -1) return;
+                      
+                      // Reorder locally
+                      const newLines = [...lines];
+                      const [draggedLine] = newLines.splice(
+                        newLines.findIndex(l => l.id === draggedLineId), 
+                        1
+                      );
+                      const insertIndex = newLines.findIndex(l => l.id === line.id);
+                      newLines.splice(insertIndex, 0, draggedLine);
+                      
+                      // Update sort_order for all lines
+                      const updates = newLines.map((l, i) => ({
+                        id: l.id,
+                        sort_order: i + 1,
+                      }));
+                      
+                      // Optimistic update
+                      setLines(newLines.map((l, i) => ({ ...l, sort_order: i + 1 })));
+                      
+                      // Save to DB
+                      for (const update of updates) {
+                        await supabase
+                          .from("lines")
+                          .update({ sort_order: update.sort_order })
+                          .eq("id", update.id);
+                      }
+                      
+                      setDraggedLineId(null);
+                    }}
+                    className={
+                      "grid grid-cols-[260px_repeat(7,minmax(0,1fr))] text-xs border-b border-slate-800 transition-opacity " +
+                      (draggedLineId === line.id ? "opacity-50" : "") +
+                      (draggedLineId && draggedLineId !== line.id ? " border-t-2 border-t-sky-500/50" : "")
+                    }
                   >
-                    {/* Line label + edit/delete */}
+                    {/* Line label + drag handle + edit/delete */}
                     <div className="px-2 py-2 bg-slate-800/80 font-medium flex items-center gap-2">
+                      {/* Drag handle */}
+                      <span 
+                        className="cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 select-none"
+                        title="Drag to reorder"
+                      >
+                        ⋮⋮
+                      </span>
                       {editingLineId === line.id ? (
                         <>
                           <input
@@ -1249,25 +1426,38 @@ export default function CalendarPage() {
                       {day.getDate()}
                     </span>
                     {bookingsForDay.length > 0 && (
-                      <div className="mt-1 space-y-0.5 text-[10px] text-emerald-300">
-                        {Object.entries(
-                          bookingsForDay.reduce((acc, b) => {
-                            const type = b.course_type || "Course";
-                            acc[type] = (acc[type] || 0) + 1;
-                            return acc;
-                          }, {} as Record<string, number>)
-                        ).map(([type, count]) => {
-                          const short =
-                            type.length > 9
-                              ? type.slice(0, 9).trimEnd() + "…"
-                              : type;
-
-                          return (
-                            <div key={type} className="truncate">
-                              {short} x{count}
-                            </div>
+                      <div className="mt-0.5 space-y-0 text-[9px] text-emerald-300 overflow-hidden flex-1 min-h-0">
+                        {(() => {
+                          const grouped = Object.entries(
+                            bookingsForDay.reduce((acc, b) => {
+                              const type = b.course_type || "Course";
+                              acc[type] = (acc[type] || 0) + 1;
+                              return acc;
+                            }, {} as Record<string, number>)
                           );
-                        })}
+                          const shown = grouped.slice(0, 3);
+                          const hasMore = grouped.length > 3;
+                          return (
+                            <>
+                              {shown.map(([type, count]) => {
+                                const short =
+                                  type.length > 7
+                                    ? type.slice(0, 7).trimEnd() + "…"
+                                    : type;
+                                return (
+                                  <div key={type} className="truncate leading-tight">
+                                    {short} x{count}
+                                  </div>
+                                );
+                              })}
+                              {hasMore && (
+                                <div className="text-slate-400 truncate leading-tight">
+                                  +{grouped.length - 3} more
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </button>
@@ -1346,52 +1536,10 @@ export default function CalendarPage() {
               {/* STUDENT INFO TAB */}
               {activeTab === "student" && (
                 <div className="flex flex-col gap-3">
-                  {/* Existing student select */}
-                  <label className="flex flex-col gap-1">
-                    <span className="text-slate-300">Student (existing)</span>
-                    <select
-                      className="bg-slate-800 border border-slate-600 rounded-md px-2 py-1"
-                      value={draft.student_id}
-                      onChange={(e) =>
-                        updateDraft("student_id", e.target.value)
-                      }
-                    >
-                      <option value="">Select student…</option>
-                      {students.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.full_name}
-                          {s.email ? ` (${s.email})` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {/* Selected student summary */}
-                  {selectedStudent && (
-                    <div className="text-[11px] text-slate-300 bg-slate-800/50 rounded-md px-2 py-2 space-y-1">
-                      <div>
-                        <span className="font-semibold">
-                          {selectedStudent.full_name}
-                        </span>
-                      </div>
-                      {selectedStudent.email && (
-                        <div>Email: {selectedStudent.email}</div>
-                      )}
-                      {selectedStudent.phone && (
-                        <div>Phone: {selectedStudent.phone}</div>
-                      )}
-                      {selectedStudent.notes && (
-                        <div className="text-slate-400">
-                          Notes: {selectedStudent.notes}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* New student inline intake */}
-                  <div className="mt-1 space-y-2 border border-slate-700 rounded-md p-2 bg-slate-800/40 text-xs">
-                    <p className="text-slate-300 font-semibold">
-                      Or create new student
+                  {/* New student inline intake - NOW FIRST */}
+                  <div className="space-y-2 border border-emerald-700/50 rounded-md p-2 bg-emerald-900/20 text-xs">
+                    <p className="text-emerald-300 font-semibold">
+                      Create new student
                     </p>
                     <label className="flex flex-col gap-1">
                       <span className="text-slate-300">Full name</span>
@@ -1436,6 +1584,67 @@ export default function CalendarPage() {
                       will be created and used for this booking when you save.
                     </p>
                   </div>
+
+                  {/* Divider */}
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <div className="flex-1 border-t border-slate-700" />
+                    <span>or select existing</span>
+                    <div className="flex-1 border-t border-slate-700" />
+                  </div>
+
+                  {/* Existing student select with search */}
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      className="w-full bg-slate-800 border border-slate-600 rounded-md px-2 py-1 text-xs"
+                      placeholder="🔍 Search students by name, email, or phone..."
+                      value={studentSearch}
+                      onChange={(e) => setStudentSearch(e.target.value)}
+                    />
+                    <select
+                      className="w-full bg-slate-800 border border-slate-600 rounded-md px-2 py-1"
+                      value={draft.student_id}
+                      onChange={(e) =>
+                        updateDraft("student_id", e.target.value)
+                      }
+                      size={Math.min(6, filteredStudents.length + 1)}
+                    >
+                      <option value="">Select student…</option>
+                      {filteredStudents.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.full_name}
+                          {s.email ? ` (${s.email})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {filteredStudents.length === 0 && studentSearch && (
+                      <p className="text-[10px] text-slate-400">
+                        No students match "{studentSearch}"
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Selected student summary */}
+                  {selectedStudent && (
+                    <div className="text-[11px] text-slate-300 bg-slate-800/50 rounded-md px-2 py-2 space-y-1">
+                      <div>
+                        <span className="font-semibold">
+                          {selectedStudent.full_name}
+                        </span>
+                      </div>
+                      {selectedStudent.email && (
+                        <div>Email: {selectedStudent.email}</div>
+                      )}
+                      {selectedStudent.phone && (
+                        <div>Phone: {selectedStudent.phone}</div>
+                      )}
+                      {selectedStudent.notes && (
+                        <div className="text-slate-400">
+                          Notes: {selectedStudent.notes}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
